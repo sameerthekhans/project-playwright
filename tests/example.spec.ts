@@ -32,7 +32,7 @@ test('delete todo', async ({ page }) => {
 
   await expect(firstItem).toHaveText(/Sample Todo/);
 
-  await firstItem.hover()
+  // await firstItem.hover()
   await firstItem.getByLabel('Delete').click()
   await expect(firstItem).toHaveCount(0)
 });
