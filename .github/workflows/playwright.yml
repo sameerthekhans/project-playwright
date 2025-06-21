@@ -1,0 +1,105 @@
+name: Playwright and Deploy Report
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      MAX_REPORTS: 3
+      ARTIFACT_NAME: playwright-history
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: lts/*
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Download previous history artifact via GitHub REST API
+        run: |
+          mkdir -p dist/runs
+          echo "Fetching previous artifact ID..."
+
+          ARTIFACT_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/artifacts \
+            | jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id" | head -n 1)
+
+          if [ -z "$ARTIFACT_ID" ]; then
+            echo "No previous artifact found."
+            exit 0
+          fi
+
+          echo "Found artifact ID: $ARTIFACT_ID. Downloading..."
+          curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -o artifact.zip \
+            https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip
+
+          unzip -o artifact.zip -d dist/runs || echo "Unzip failed or empty archive"
+
+      - name: Rotate previous reports
+        run: |
+          echo "Rotating folders..."
+          for ((i=$MAX_REPORTS; i>1; i--)); do
+            prev=$((i - 1))
+            if [ -d "dist/runs/run-$prev" ]; then
+              mv "dist/runs/run-$prev" "dist/runs/run-$i"
+            fi
+          done
+
+          if [ -d "dist/runs/latest" ]; then
+            mv dist/runs/latest dist/runs/run-1
+          fi
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Add new test report to latest
+        run: |
+          cp -r playwright-report dist/runs/latest
+
+      - name: Generate index.html
+        run: |
+          echo "<html><body><h1>Playwright Report History</h1><ul>" > dist/index.html
+          echo "<li><a href='./runs/latest/index.html'>Latest Run</a></li>" >> dist/index.html
+          for ((i=1; i<=MAX_REPORTS; i++)); do
+            echo "<li><a href='./runs/run-$i/index.html'>Run $i</a></li>" >> dist/index.html
+          done
+          echo "</ul></body></html>" >> dist/index.html
+
+      - name: Upload updated history as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-history
+          path: dist/runs
+          retention-days: 90
+
+      - name: Upload for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: test-and-deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
