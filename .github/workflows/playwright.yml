@@ -11,6 +11,8 @@ permissions:
 jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
     env:
       MAX_REPORTS: 3
       ARTIFACT_NAME: playwright-history
@@ -65,12 +67,15 @@ jobs:
             mv dist/runs/latest dist/runs/run-1
           fi
 
-      - name: Run Playwright tests
-        run: npx playwright test
+      - name: Run Playwright tests (allow failure)
+        run: |
+          set +e
+          npx playwright test
+          echo $? > .playwright-exit-code
+          exit 0
 
       - name: Add new test report to latest
-        run: |
-          cp -r playwright-report dist/runs/latest
+        run: cp -r playwright-report dist/runs/latest
 
       - name: Generate index.html
         run: |
@@ -93,13 +98,16 @@ jobs:
         with:
           path: dist
 
-  deploy:
-    needs: test-and-deploy
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Fail workflow if tests failed
+        run: |
+          CODE=$(cat .playwright-exit-code)
+          if [ "$CODE" != "0" ]; then
+            echo "❌ Playwright tests failed — exiting with code $CODE"
+            exit $CODE
+          else
+            echo "✅ Playwright tests passed"
+          fi
